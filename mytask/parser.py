@@ -88,17 +88,19 @@ class ParserSearch:
         else:
             end_par = cls.REVERSE_PAR["("]
 
-        merge_value = []
-        while True:
-            next_text = split_text.pop(idx).replace("(", "")
-            if end_par in next_text:
-                merge_value.append(next_text.replace(")", ""))
-                break
-            else:
-                merge_value.append(next_text.replace(")", ""))
+        last_idx = idx
+        stop = False
+        for text in split_text[idx:]:
+            if end_par in text:
+                stop = True
 
-        value = cls.build_query(allowed_fields, merge_value)
-        split_text.insert(idx, value)
+            split_text[last_idx] = text.replace("(", "").replace(")", "").strip()
+            last_idx += 1
+            if stop:
+                break
+
+        value = cls.build_query(allowed_fields, split_text[idx: last_idx+1])
+        split_text[idx: last_idx] = ""
         return value
 
     @classmethod
