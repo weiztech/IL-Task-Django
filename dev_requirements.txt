@@ -1,0 +1,5 @@
+-r requirements.txt
+
+flake8==4.0.1
+pep8==1.7.1
+notebook==6.4.8
