@@ -132,6 +132,10 @@ class AnimalTestCase(TestCase):
         search = "(date eq 2016-05-01) AND (((name eq Mars) AND (distance gt 20)) OR (distance lt 10)) AND (distance lt 10000)"  # noqa: E501
         assert ParserSearch.parse(["date", "distance"], search) == Q()
 
+        search = "(date ne 2016-05-01) AND ((distance gt 20) OR (distance lt 10)) (date gt 2000-05-01)"
+        assert ParserSearch.parse(["date", "distance"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & (Q(distance__gt=20) | Q(distance__lt=10))
+
         # Test with invalid and unspecified allowed field
         search = "(date ne 2016-05-01) AND ((distance gt 20) OR (distance lt 10))"
         assert ParserSearch.parse(["field", "any"], search) == Q()

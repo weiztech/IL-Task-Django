@@ -93,6 +93,7 @@ class ParserSearch:
         for text in split_text[idx:]:
             if end_par in text:
                 stop = True
+                text = text[:text.index(end_par)]
 
             split_text[last_idx] = text.replace("(", "").replace(")", "").strip()
             last_idx += 1
@@ -100,7 +101,8 @@ class ParserSearch:
                 break
 
         value = cls.build_query(allowed_fields, split_text[idx: last_idx+1])
-        split_text[idx: last_idx] = ""
+        split_text.insert(idx, value)
+        split_text[idx+1: last_idx+1] = ""
         return value
 
     @classmethod
