@@ -4,35 +4,29 @@ from datetime import datetime
 from ast import literal_eval
 
 from dateutil.parser import parse, ParserError
+from pyparsing import Word, alphanums, nestedExpr
+from pyparsing.exceptions import ParseException
 
 from django.db.models import Q
 
 
-EQ = " eq "
-GT = " gt "
-LT = " lt "
-NE = " ne "
+WORD = Word(alphanums + " " + "-")
+AND = "AND"
+OR = "OR"
 
 
 class ParserSearch:
-    PARSE_EXPR = {
-        EQ: "",
-        GT: "__gt",
-        LT: "__lt"
-    }
-
-    REVERSE_PAR = {
-        "(": ")",
-        "((": "))"
-    }
+    _PARSER = nestedExpr(opener='(', closer=')', content=WORD)
 
     @staticmethod
-    def parse_value(text_value: str) -> Union[str, int, bool, datetime]:
+    def _parse_value(text_value: str) -> Union[str, int, bool, datetime]:
         '''
         Parse string value
         '''
+        # parse digit
+        text_value = text_value.strip()
         if text_value.isdigit():
-            return literal_eval(text_value)
+            return int(text_value)
 
         # parse datetime format
         try:
@@ -40,114 +34,81 @@ class ParserSearch:
         except ParserError:
             pass
 
-        # parse other than datetime format
+        # parse other format
         try:
             return literal_eval(text_value)
         except ValueError:
             return text_value
 
     @staticmethod
-    def get_text(text_value: str) -> str:
-        '''
-        return value inside parenthesis
-        ex: (date eq 2016-05-01)
-        return date eq 2016-05-01
-        '''
-        search = re.search(r'\(([^)]+)', text_value).groups()[0]
-        return search
+    def _clean_query_string(query_string: str):
+        return re.split(r'(AND|OR)', query_string)
 
     @classmethod
-    def make_q_object(cls, allowed_fields: Union[list, tuple], text: str) -> Union[None, Q]:
-        '''
-        Create Q object from string, return None if expression not found
-        '''
-        if "(" in text and ")" in text:
-            text = cls.get_text(text)
+    def _make_query(cls, allowed_fields: Union[list[str], tuple[str]], query_string: str):
+        query = re.match(
+            r'(?P<field>[A-Za-z-0-9_]+) (?P<op>ne|eq|gt|lt) (?P<value>[\w\W]+)',
+            query_string).groupdict()
 
-        field = text.split(" ")[0]
-        if field not in allowed_fields:
+        if query["field"] not in allowed_fields:
             return
 
-        for expr in [EQ, GT, LT, NE]:
-            if expr in text:
-                value = text.split(expr)[-1]
-                field = f"{field}{cls.PARSE_EXPR[expr]}" if expr != NE else field
-                qobj = Q(**{field: cls.parse_value(value)})
-                if expr == NE:
-                    qobj.negate()
-
-                return qobj
+        op = query["op"]
+        field = "%s" % (query["field"] + "__" + op) if op not in ["eq", "ne"] else query["field"]
+        qobj = Q(**{field: cls._parse_value(query["value"])})
+        return ~qobj if op == "ne" else qobj
 
     @classmethod
-    def merge_value(cls, idx: int, split_text: list[str], allowed_fields: Union[list, tuple]) -> Q:
-        '''
-        Merge the level 2 nested parenthesis query and return Q object
-        '''
-        if "((" in split_text[idx]:
-            end_par = cls.REVERSE_PAR["(("]
-        else:
-            end_par = cls.REVERSE_PAR["("]
-
-        last_idx = idx
-        stop = False
-        for text in split_text[idx:]:
-            if end_par in text:
-                stop = True
-                text = text[:text.index(end_par)]
-
-            split_text[last_idx] = text.replace("(", "").replace(")", "").strip()
-            last_idx += 1
-            if stop:
-                break
-
-        value = cls.build_query(allowed_fields, split_text[idx: last_idx+1])
-        split_text.insert(idx, value)
-        split_text[idx+1: last_idx+1] = ""
-        return value
-
-    @classmethod
-    def build_query(cls, allowed_fields: Union[list, tuple], split_text: list[str]) -> Q:
-        query = None
+    def _build_query(cls, allowed_fields: Union[list[str], tuple[str]], raw_data):
+        qobj = Q()
+        last_op = AND
         idx = 0
-        while True:
-            value = split_text[idx].strip()
-            if value.startswith("(((") or value.endswith(")))"):
-                # nested more than 2 level is not allowed and return Q
-                return Q()
 
-            if (value.startswith("((") and not value.endswith("))")) or \
-                    value.startswith("(") and not value.endswith(")"):
-                value = cls.merge_value(idx, split_text, allowed_fields)
-                qobj = value
-
-            if not isinstance(value, Q):
-                qobj = cls.make_q_object(allowed_fields, value)
-
-            if query is None:
-                query = qobj
-
-            if qobj and query != qobj:
-                op = None if not idx else split_text[idx-1].strip()
-                if op == "AND":
-                    query = query & qobj
-                elif op == "OR":
-                    query = query | qobj
-
+        while raw_data:
+            item = raw_data[idx]
             idx += 1
-            if idx >= len(split_text):
+
+            if isinstance(item, list):
+                item = cls._build_query(allowed_fields, item)
+
+            if isinstance(item, str):
+                item = item.strip()
+
+                if item.upper() in [AND, OR]:
+                    last_op = item.upper()
+                    continue
+
+                cleaned_query = cls._clean_query_string(item)
+                if len(cleaned_query) > 1:
+                    raw_data[idx-1: idx] = cleaned_query
+                    item = cleaned_query[0]
+
+                if item:
+                    item = cls._make_query(allowed_fields, item)
+
+            if isinstance(item, Q):
+                if last_op == AND:
+                    qobj = qobj & item
+                elif last_op == OR:
+                    qobj = qobj | item
+
+            if idx >= len(raw_data):
                 break
 
-        return query or Q()
+        return qobj
+
+    @staticmethod
+    def _validate_parse_input(allowed_fields: Union[list[str], tuple[str]], search_phrase: str):
+        if not isinstance(allowed_fields, (list, tuple)):
+            raise ValueError
+
+        if not isinstance(search_phrase, str):
+            raise ValueError
 
     @classmethod
-    def split_text(cls, text: str) -> str:
-        return re.split(r'[ ]([AND, OR]+\b)', text)
-
-    @classmethod
-    def parse(cls, allowed_fields: Union[list, tuple], search_phrase: str) -> Q:
+    def parse(cls, allowed_fields: Union[list[str], tuple[str]], search_phrase: str):
         '''
         Parse text string to Q object
-
         :param Union[list, tuple, None] allowed_fields, if None then return all field in search_phrase
         ex: ["model_field_name", "model_field_name"] or None
 
@@ -160,15 +121,12 @@ class ParserSearch:
         - "date ne 2016-05-01 AND (distance gt 20 OR distance lt 10)"
         - "date gt 2000-01-01"
         - "date gt 2000-01-01 AND distance gt 2000 OR name eq Mars OR name ne Saturnus"
+        - (date ne 2016-05-01) AND (((distance gt 20) OR (distance lt 10)) AND (name eq momon))
+        - (date ne 2016-05-01) AND ((((distance gt 20) OR (distance lt 10)) AND (name eq momon)) AND (date gt 2000-01-01)) OR (name ne Neptunus)"  # noqa: E501
         '''
+        cls._validate_parse_input(allowed_fields, search_phrase)
         try:
-            if not isinstance(allowed_fields, (list, tuple)):
-                raise ValueError("Allowed fields is invalid")
-
-            if not isinstance(search_phrase, str):
-                raise ValueError("search_phrase should be string")
-
-            return cls.build_query(allowed_fields, cls.split_text(search_phrase))
-        except IndexError:
-            # Found Invalid format, return empty Q
+            raw_data = cls._PARSER.parseString(f"({search_phrase})", parseAll=True).as_list()
+            return cls._build_query(allowed_fields, raw_data)
+        except (ParseException, AttributeError):
             return Q()

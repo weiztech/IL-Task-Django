@@ -68,6 +68,26 @@ class AnimalTestCase(TestCase):
         search = "date gt 2000-01-01"
         assert ParserSearch.parse(["date"], search) == Q(date__gt=datetime(2000, 1, 1))
 
+        # Multiple nested
+        search = "(date eq 2016-05-01) AND (((name eq Mars) AND (distance gt 20)) OR (distance lt 10)) AND (distance lt 10000)"  # noqa: E501
+        assert ParserSearch.parse(["date", "distance", "name"], search) == \
+            Q(date=datetime(2016, 5, 1)) & ((Q(name="Mars") & Q(distance__gt=20)) | Q(distance__lt=10)) &\
+            Q(distance__lt=10000)
+
+        search = "(date ne 2016-05-01) AND (((distance gt 20) OR (distance lt 10)) AND (name eq momon))"
+        assert ParserSearch.parse(["date", "distance", "name"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & (((Q(distance__gt=20) | Q(distance__lt=10)) & Q(name="momon")))
+
+        search = "(date ne 2016-05-01) AND ((((distance gt 20) OR (distance lt 10)) AND (name eq momon)) AND (date gt 2000-01-01))"  # noqa: E501
+        assert ParserSearch.parse(["date", "distance", "name"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & ((((Q(distance__gt=20) | Q(distance__lt=10)) & Q(name="momon"))) &
+                                             Q(date__gt=datetime(2000, 1, 1)))
+
+        search = "(date ne 2016-05-01) AND ((((distance gt 20) OR (distance lt 10)) AND (name eq momon)) AND (date gt 2000-01-01)) OR (name ne Neptunus)"  # noqa: E501
+        assert ParserSearch.parse(["date", "distance", "name"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & ((((Q(distance__gt=20) | Q(distance__lt=10)) & Q(name="momon"))) &
+                                             Q(date__gt=datetime(2000, 1, 1))) | ~Q(name="Neptunus")
+
         # Exclude fields test
         search = "date gt 2000-01-01 AND distance gt 2000 OR name eq Mars OR name ne Saturnus"
         assert ParserSearch.parse(["date", "name"], search) == \
@@ -97,16 +117,13 @@ class AnimalTestCase(TestCase):
         # try to break the parser with invalid search format
         # Parser should try to parse then return the possible Q object and should not return any traceback
         search = "(date ne 2016-05-01) AND ((distance gt 20) OR (distance lt 10)))))"
-        assert ParserSearch.parse(["date", "distance"], search) == \
-            ~Q(date=datetime(2016, 5, 1)) & (Q(distance__gt=20) | Q(distance__lt=10))
+        assert ParserSearch.parse(["date", "distance"], search) == Q()
 
         search = "(date ne 2016-05-01 AND ((distance gt 20) OR (distance lt 10))"
-        assert ParserSearch.parse(["date", "distance"], search) == \
-            ~Q(date=datetime(2016, 5, 1)) & Q(distance__gt=20) | Q(distance__lt=10)
+        assert ParserSearch.parse(["date", "distance"], search) == Q()
 
         search = "((date ne 2016-05-01 AND ((distance gt 20) OR (distance lt 10))"
-        assert ParserSearch.parse(["date", "distance"], search) == \
-            ~Q(date=datetime(2016, 5, 1)) & Q(distance__gt=20) | Q(distance__lt=10)
+        assert ParserSearch.parse(["date", "distance"], search) == Q()
 
         search = "(((date ne 2016-05-01 AND ((distance gt 20) OR (distance lt 10))"
         assert ParserSearch.parse(["date", "distance"], search) == Q()
@@ -129,12 +146,20 @@ class AnimalTestCase(TestCase):
         search = "date nexxx 2016-05-01"
         assert ParserSearch.parse(["date"], search) == Q()
 
-        search = "(date eq 2016-05-01) AND (((name eq Mars) AND (distance gt 20)) OR (distance lt 10)) AND (distance lt 10000)"  # noqa: E501
-        assert ParserSearch.parse(["date", "distance"], search) == Q()
-
         search = "(date ne 2016-05-01) AND ((distance gt 20) OR (distance lt 10)) (date gt 2000-05-01)"
         assert ParserSearch.parse(["date", "distance"], search) == \
-            ~Q(date=datetime(2016, 5, 1)) & (Q(distance__gt=20) | Q(distance__lt=10))
+            ~Q(date=datetime(2016, 5, 1)) & (Q(distance__gt=20) | Q(distance__lt=10)) &\
+            Q(date__gt=datetime(2000, 5, 1))
+
+        search = "((((date ne 2016-05-01)))) AND ((((distance gt 20) OR (distance lt 10)))) OR ((date gt 2000-05-01))"
+        assert ParserSearch.parse(["date", "distance"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & (Q(distance__gt=20) | Q(distance__lt=10)) |\
+            Q(date__gt=datetime(2000, 5, 1))
+
+        search = "((((date ne 2016-05-01)))) AND (((((distance gt 20) OR (distance lt 10)))) OR ((date gt 2000-05-01)))"
+        assert ParserSearch.parse(["date", "distance"], search) == \
+            ~Q(date=datetime(2016, 5, 1)) & ((Q(distance__gt=20) | Q(distance__lt=10)) |
+                                             Q(date__gt=datetime(2000, 5, 1)))
 
         # Test with invalid and unspecified allowed field
         search = "(date ne 2016-05-01) AND ((distance gt 20) OR (distance lt 10))"
@@ -169,7 +194,6 @@ class AnimalTestCase(TestCase):
         search_phrase = "(date gt 2000-01-01) AND (distance gt 2000) OR (name eq Mars) OR (name eq Saturnus)"
         query_str = ParserSearch.parse(["date", "distance", "name"], search_phrase)
         query = Q(date__gt=datetime(2000, 1, 1)) & Q(distance__gt=2000) | Q(name="Mars") | Q(name="Saturnus")
-
         assert query_str == query
         result_query = Planet.objects.filter(query)
         result_query_str = Planet.objects.filter(query_str)
