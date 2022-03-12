@@ -76,7 +76,7 @@ class ParserSearch:
 
                 if item.upper() in [AND, OR]:
                     last_op = item.upper()
-                    continue
+                    item = ""
 
                 cleaned_query = cls._clean_query_string(item)
                 if len(cleaned_query) > 1:
